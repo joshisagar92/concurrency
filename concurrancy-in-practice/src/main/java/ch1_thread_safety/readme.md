@@ -36,7 +36,7 @@ an issue.
 ### Atomicity
 What happens when we add one element of state to what was a stateless object? 
 
-[**code**](/ch1_thread_safety/Atomicity.java)
+[**code**](Atomicity.java)
 
 Suppose we want to add `count` as state of the Atomic class, which will increase on every request.
 Now Automic class is not thread safe as StatelessFactorizer. It seems to work correct in single threaded environment but it is 
@@ -99,7 +99,7 @@ equal the value cached in lastNumber; our servlet is correct only if this invari
 participate in an invariant, they are not independent: the value of one constrains the allowed value(s) of the others.
 Thus when updating one, you must update the others in the same atomic operation.
 
-[**Code**](/ch1_thread_safety/Locking.java)
+[**Code**](Locking.java)
 
 With some unlucky timing, UnsafeCachingFactorizer can violate this invariant. Using atomic references, we cannot update 
 both lastNumber and lastFactors simultaneously, even though each call to set is atomic; there is still a window of 
@@ -203,5 +203,6 @@ if this would not compromise atomicity.
 Complete.java holds the lock when accessing state variables and for the duration of compound actions, but releases it
 before executing the potentially long-running factorization operation. This preserves thread safety without unduly
 affecting concurrency; the code paths in each of the synchronized blocks are “short enough”
-[**code**](/ch1_thread_safety/Complete.java)
+
+[**code**](Complete.java)
 
