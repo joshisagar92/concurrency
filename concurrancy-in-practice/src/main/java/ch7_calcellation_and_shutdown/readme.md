@@ -400,6 +400,130 @@ interface CancellableTask<T> extends Callable<T>{
     }
 ```
 
+### STOPPING A THREAD-BASED SERVICE
+Applications commonly create services that own threads, such as thread pools, and the lifetime of these services is usually longer than that
+of the method that creates them. If the application is to shut down gracefully, the threads owned by these services need to be terminated. 
+Sensible encapsulation practices dictate that you should not manipulate a thread—interrupt it, modify its priority, etc.—unless you own it.
+
+However, it makes sense to think of a thread as having an owner, and this is usually the class that created the thread. So a thread pool owns
+its worker threads, and if those threads need to be interrupted, the thread pool should take care of it.
+
+As with any other encapsulated object, thread ownership is not transitive: the application may own the service and the service may own the worker threads,
+but the application doesn't own the worker threads and therefore should not attempt to stop them directly.
+Instead, the service should provide lifecycle methods for shutting itself down that also shut down the owned threads; then the application can
+shut down the service, and the service can shut down the threads.
+ExecutorService provides the shutdown and shutdownNow methods; other thread-owning services should provide a similar shutdown mechanism.
+
+For a service like [***LogWriter***](LogWriter.java) to be useful in production, we need a way to terminate the logger thread so it does not prevent
+the JVM from shutting down normally. Stopping the logger thread is easy enough, since it repeatedly calls take, which is
+responsive to interruption; if the logger thread is modified to exit on catching InterruptedException, then interrupting the logger thread 
+stops the service.
+
+However, simply making the logger thread exit is not a very satisfying shutdown mechanism. Such an abrupt shutdown discards log messages that
+might be waiting to be written to the log, but, more importantly, threads blocked in log because the queue is full will never become 
+unblocked. Cancelling a producerconsumer activity requires cancelling both the producers and the consumers. Interrupting the logger thread 
+deals with the consumer, but because the producers in this case are not dedicated threads, cancelling them is harder.
+
+Another approach to shutting down LogWriter would be to set a “shutdown requested” flag to prevent further messages from being submitted.
+The consumer could then drain the queue upon being notified that shutdown has been requested, writing out any
+pending messages and unblocking any producers blocked in log. However, this approach has race conditions that make it unreliable. The
+implementation of log is a check-then-act sequence: producers could observe that the service has not yet been shut down but still queue 
+messages after the shutdown, again with the risk that the producer might get blocked in log and never become unblocked.
+
+```java
+public void log(String message) throws InterruptedException {
+        if(!shutDownIsRequested)
+            queue.put(message);
+        else
+            throw new IllegalStateException
+    }
+```
+The way to provide reliable shutdown for LogWriter is to fix the race condition, which means making the submission of a new log message 
+atomic. But we don't want to hold a lock while trying to enqueue the message, since put could block.
+Instead, we can atomically check for shutdown and conditionally increment a counter to “reserve” the right to submit a message
+
+#### ExecutorService Shutdown
+we saw that ExecutorService offers two ways to shut down: graceful shutdown with shutdown, and abrupt shutdown with shutdownNow. In an abrupt
+shutdown, shutdownNow returns the list of tasks that had not yet started after attempting to cancel all actively executing tasks.
+
+The two different termination options offer a tradeoff between safety and responsiveness: abrupt termination is faster but riskier because
+tasks may be interrupted in the middle of execution, and normal termination is slower but safer because the ExecutorService does not shut
+down until all queued tasks are processed. Other thread-owning services should consider providing a similar choice of shutdown modes.
+
+Following delegates to an ExecutorService instead of managing its own threads. Encapsulating an ExecutorService extends the ownership chain
+from application to service to thread by adding another link; each member of the chain manages the lifecycle of the services or threads it
+owns.
+
+```java
+class LogService{
+        private final ExecutorService service = Executors.newSingleThreadExecutor();
+
+        public void start(){
+
+        }
+
+        public void stop(){
+            service.shutdown();
+            try {
+                service.awaitTermination(10, TimeUnit.MINUTES);
+            } catch (InterruptedException e) {
+
+            }finally {
+                writer.close();
+            }
+
+        }
+
+        public void log(){
+            try{
+                service.execute(new WriteTask(msg));
+            }catch (Exception e){
+                
+            }
+        }
+    }
+```
+    
+#### Poison Pills
+Another way to convince a producer-consumer service to shut down is with a poison pill: a recognizable object placed on the queue that means
+“when you get this, stop.” With a FIFO queue, poison pills ensure that consumers finish the work on their queue before shutting down,
+since any work submitted prior to submitting the poison pill will be retrieved before the pill; producers should not submit any work after
+putting a poison pill on the queue.
+
+Poison pills work only when the number of producers and consumers is known. The approach in IndexingService can be extended tomultiple producers
+by having each producer place a pill on the queue and having the consumer stop only when it receives Nproducers pills. It can be extended
+to multiple consumers by having each producer place Nconsumers pills on the queue, though this can get unwieldy with large numbers of 
+producers and consumers.
+
+oison pills work only when the number of producers and consumers is known. The approach in IndexingService can be extended tomultiple producers
+by having each producer place a pill on the queue and having the consumer stop only when it receives Nproducers pills. It can be extended
+to multiple consumers by having each producer place Nconsumers pills on the queue, though this can get unwieldy with large numbers of
+producers and consumers. Poison pills work reliably only with unbounded queues. 
+
+#### A One shot execution service
+If a method needs to process a batch of tasks and does not return until all the tasks are finished, it can simplify service lifecycle management
+by using a private Executor whose lifetime is bounded by that method.
+
+The checkMail method checks for new mail in parallel on a number of hosts. It creates a private executor and submits a
+task for each host: it then shuts down the executor and waits for termination, which occurs when all the mail-checking tasks have completed.
+
+#### Limitation Of shutdownNow
+When an ExecutorService is shut down abruptly with shutdownNow, it attempts to cancel the tasks currently in progress and returns a list of
+tasks that were submitted but never started so that they can be logged or saved for later processing
+
+However, there is no general way to find out which tasks started but did not complete. This means that there is no way of knowing the
+state of the tasks in progress at shutdown time unless the tasks themselves perform some sort of checkpointing. To know which tasks have not
+completed, you need to know not only which tasks didn't start, but also which tasks were in progress when the executor was shut down.
+
+### HANDLING ABNORMAL THREAD TERMINATION
+
+ 
+
+ 
+
+
+
+
 
 
  
